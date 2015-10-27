@@ -37,14 +37,35 @@ export AWS_ACCESS_KEY_ID=$S3_ACCESS_KEY_ID
 export AWS_SECRET_ACCESS_KEY=$S3_SECRET_ACCESS_KEY
 export AWS_DEFAULT_REGION=$S3_REGION
 
-MYSQL_HOST_OPTS="-h $MYSQL_HOST --port $MYSQL_PORT -u $MYSQL_USER -p$MYSQL_PASSWORD"
+MYSQL_HOST_OPTS="-h$MYSQL_HOST --port $MYSQL_PORT -u$MYSQL_USER -p$MYSQL_PASSWORD"
 
-echo "Creating dump of ${MYSQLDUMP_DATABASE} database(s) from ${MYSQL_HOST}..."
+if [ "$MYSQLDUMP_DATABASE" = "--all-separate" ]; then
 
-mysqldump $MYSQL_HOST_OPTS $MYSQLDUMP_OPTIONS $MYSQLDUMP_DATABASE | gzip > dump.sql.gz
+  # dump each database to its own sql file and upload it to s3
+  for DB in $(mysql $MYSQL_HOST_OPTS --BNe 'show databases' | grep -Ev 'mysql|information_schema|performance_schema')
+  do
+    echo "Creating dump of ${DB}."
+    mysqldump $MYSQL_HOST_OPTS $MYSQLDUMP_OPTIONS $DB > $DB.sql
+    tar -czPf $DB.tar.gz $DB.sql
 
-echo "Uploading dump to $S3_BUCKET"
+    echo "Uploading to $S3_BUCKET"
+    cat dump.sql.gz | aws s3 cp - s3://$S3_BUCKET/$S3_PREFIX/$(date +"%Y-%m-%dT%H:%M:%SZ").sql.gz || exit 2
 
-cat dump.sql.gz | aws s3 cp - s3://$S3_BUCKET/$S3_PREFIX/$(date +"%Y-%m-%dT%H:%M:%SZ").sql.gz || exit 2
+    # Remove local copies
+    rm -f dump.sql.gz
+    rm -f $DB.sql
 
-echo "SQL backup uploaded successfully"
+    echo "SQL backup of ${DB} uploaded successfully"
+  done
+
+else
+
+  echo "Creating dump of ${MYSQLDUMP_DATABASE} database(s) from ${MYSQL_HOST}..."
+  mysqldump $MYSQL_HOST_OPTS $MYSQLDUMP_OPTIONS $MYSQLDUMP_DATABASE | gzip > dump.sql.gz
+
+  echo "Uploading dump to $S3_BUCKET"
+  cat dump.sql.gz | aws s3 cp - s3://$S3_BUCKET/$S3_PREFIX/$(date +"%Y-%m-%dT%H:%M:%SZ").sql.gz || exit 2
+
+  echo "SQL backup uploaded successfully"
+
+fi
